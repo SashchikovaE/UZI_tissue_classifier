@@ -30,11 +30,11 @@ class XGB (Model):
         return model
 
     def get_sample_weights(self, y_train):
-        class_weights = {0: 10.0, 1: 10.0, 2: 1.0, 3: 1.0, 4: 1.0}
+        class_weights = 'balanced'
         return np.array([class_weights[label] for label in y_train])
 
-    def run_xgb(self, X, y, groups, save=False):
+    def run_xgb(self, X_train, X_test, y_train, y_test, save=False):
         print("sklearn XGBoost")
-        print(self.train_and_evaluate(X, y, groups, get_sample_weights=self.get_sample_weights))
+        print(self.train_and_evaluate(X_train, X_test, y_train, y_test, get_sample_weights=self.get_sample_weights))
         if save:
-            self.save_model(X, y, 'XGBoost')
+            self.save_model(X_train, y_train, 'XGBoost')

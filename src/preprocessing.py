@@ -10,7 +10,7 @@ import pandas as pd
 from skimage.transform import rotate, warp, AffineTransform
 
 class DataPreprocessor():
-    def __init__(self, raw, mask=None, isFirstPreprocess=True, test_image=None):
+    def __init__(self, raw, mask, test_image=None):
         """
             self.raw_path - расширение для сырых изображений
             self.mask_path - расширение для масок
@@ -22,10 +22,8 @@ class DataPreprocessor():
         self.raw_images = []
         self.mask_images = []
         self.test_image = test_image
-        self.isFirstPreprocess = isFirstPreprocess
         self.load()
-        if isFirstPreprocess:
-            self.augment_images()
+        self.augment_images()
         self.classes = {
             (0, 0, 0): 0,  # черный → фон
             (255, 255, 0): 1,  # 0 желтый → жировая паренхима
@@ -45,8 +43,6 @@ class DataPreprocessor():
         raw_path_list = sorted(glob.glob(str(Path(__file__).parent.parent / 'data/raws' / self.raw_path)))
         mask_path_list = sorted(glob.glob(str(Path(__file__).parent.parent / 'data/masks' / self.mask_path)))
         for r, m in zip(raw_path_list, mask_path_list):
-            if r == self.test_image:
-                continue
             raw = imread(r)
             mask = imread(m)
             self.raw_images.append(raw)
@@ -60,6 +56,8 @@ class DataPreprocessor():
         image_ids = []
 
         for idx, (raw, mask) in enumerate(zip(self.raw_images, self.mask_images)):
+            if idx == self.test_image:
+                continue
             new_raw.append(raw)
             new_mask.append(mask)
             image_ids.append(idx)
@@ -92,9 +90,8 @@ class DataPreprocessor():
 
         self.raw_images = new_raw
         self.mask_images = new_mask
-        return image_ids
 
-    def vizualize(self):
+    def visualize(self):
         for i in range(9):
             plt.subplot(2, 9, i + 1)
             plt.axis("off")
@@ -118,7 +115,7 @@ class DataPreprocessor():
             - order = 2 биквадрат ()
             - order = 3 бикуб ()
             - preserve_range -
-            - anti_aliasing - контрастность. фолс-пискельность четкость. тру-размытие плавный переход.
+            - anti_aliasing - контрастность. false - пискельность четкость. true - размытие плавный переход.
             - mode - 'reflect'
             :return:
         """
@@ -132,20 +129,19 @@ class DataPreprocessor():
         self.raw_images = raw_resized
         self.mask_images = mask_resized
 
-    def lbp(self):
+    def _compute_lbp_for_pixel(self):
         lbp_images = []
         for i in self.raw_images:
             if len(i.shape) < 3:
                 print("good")
             else:
                 i = (rgb2gray(i) * 255).astype(np.uint8)
-                #i = rgb2gray(i)
             lb = local_binary_pattern(i, 8, 1)
             lbp_images.append(lb)
         return lbp_images
 
     def extract_lbp_patches(self, haralik_window=8, stride=4):
-        lbp_images = self.lbp()
+        lbp_images = self._compute_lbp_for_pixel()
         X = []
         y = []
         half = haralik_window // 2
@@ -157,19 +153,14 @@ class DataPreprocessor():
                 for x_coord in range(half, w - half, stride):
                     patch = img[y_coord - 1:y_coord + 2, x_coord - 1:x_coord + 2]
                     features = patch.ravel().tolist()
-                    features.append(img_idx // 7)
-                    #row_normalized = y_coord / h
-                    #col_normalized = x_coord / w
-                    #features.append(img_idx)
-                    #features.append(row_normalized)
-                    #features.append(col_normalized)
+                    features.append(img_idx)
                     rgb = tuple(mask[y_coord, x_coord])
                     target = self.classes.get(rgb, 0)
                     X.append(features)
                     y.append(target)
-        return X, y
+        return np.array(X), np.array(y)
 
-    def haralik(self, window_size=8, stride=4):
+    def extract_haralik_patches(self, window_size=8, stride=4):
         """
         glcm = graycomatrix(image, distances, angles, levels,
                     symmetric=False, normed=False)
@@ -199,14 +190,14 @@ class DataPreprocessor():
                     x_start = x_coord - half
                     x_end = x_coord + half + 1
                     window = gray[y_start:y_end, x_start:x_end]
-                    haralik_features = self.compute_haralik_for_window(window)
+                    haralik_features = self._compute_haralik_for_window(window)
                     target = self.classes.get(tuple(mask[y_coord, x_coord]), 0)
                     coords.append((y_coord, x_coord))
                     X.append(haralik_features)
                     y.append(target)
         return np.array(X), np.array(y), np.array(coords)
 
-    def compute_haralik_for_window(self, window):
+    def _compute_haralik_for_window(self, window):
         levels = 32
         window_scaled = (window / (256 / levels)).astype(np.uint8)
         glcm = graycomatrix(window_scaled,
@@ -225,11 +216,11 @@ class DataPreprocessor():
             features.extend(feature.flatten())
         return features
 
-    def hessian_for_pixel(self, gray):
+    def _compute_hessian_for_pixel(self, gray):
         feat = multiscale_basic_features(gray, intensity=False, edges=False, texture=True)
         return feat
 
-    def hessian(self, haralik_window=8, stride=4):
+    def extract_hessian_patches(self, haralik_window=8, stride=4):
         X = []
         y = []
         half = haralik_window // 2
@@ -238,7 +229,7 @@ class DataPreprocessor():
                 gray = rgb2gray(raw_img)
             else:
                 gray = raw_img
-            hessian_maps = self.hessian_for_pixel(gray)
+            hessian_maps = self._compute_hessian_for_pixel(gray)
             h, w, d = hessian_maps.shape
             mask = self.mask_images[img_idx]
             for y_coord in range(half, h - half, stride):
@@ -252,6 +243,30 @@ class DataPreprocessor():
                     y.append(target)
         return np.array(X), np.array(y)
 
+    def extract_patches(self, haralik_window=8, stride=4):
+        X = []
+        y = []
+        half = haralik_window // 2
+        for img_idx, raw_img in enumerate(self.raw_images):
+            if len(raw_img.shape) == 3:
+                gray = rgb2gray(raw_img)
+            else:
+                gray = raw_img
+            hessian_maps = self._compute_hessian_for_pixel(gray)
+            h, w, d = hessian_maps.shape
+            mask = self.mask_images[img_idx]
+            for y_coord in range(half, h - half, stride):
+                for x_coord in range(half, w - half, stride):
+                    pixel_feat = hessian_maps[y_coord, x_coord, :].tolist()
+                    pixel_feat.append(y_coord / h)
+                    pixel_feat.append(x_coord / w)
+                    rgb = tuple(mask[y_coord, x_coord])
+                    target = self.classes.get(rgb, 0)
+                    X.append(pixel_feat)
+                    y.append(target)
+        return np.array(X), np.array(y)
+
+
     def save_csv(self, lbp, haral, gessian, y):
         if len(lbp) == len(haral) and len(lbp) == len(gessian):
             combined =[]
@@ -261,8 +276,8 @@ class DataPreprocessor():
             df = pd.DataFrame(combined)
             df['label'] = y
             df = df[df['label'] != 0]
-            if self.isFirstPreprocess:
-                df['label'] = df['label'] - 1
+            #if self.isFirstPreprocess:
+            df['label'] = df['label'] - 1
             #df_filtered = df[df['label'].isin([3, 4])]
             df.to_csv('db.csv', index=False)
         else:
@@ -278,24 +293,20 @@ class DataPreprocessor():
         plt.ylabel('Count')
         plt.show()
 
-    def run_prepro(self):
+    def run_preprocess(self):
         self.resize()
-        if self.isFirstPreprocess:
-            self.vizualize()
+        #self.visualize()
         lbp, lbp_y = self.extract_lbp_patches()
-        haral, haral_y, coords = self.haralik()
-        gessian, gessian_y = self.hessian()
+        haral, haral_y, coords = self.extract_haralik_patches()
+        gessian, gessian_y = self.extract_hessian_patches()
         df = self.save_csv(lbp, haral, gessian, haral_y)
-        #train_data = df[df[9] != test_image]
-        #test_data = df[df[9] == test_image]
-        #X_train = train_data.drop(columns=['label', 9])
-        #y_train = train_data['label']
-        #X_test = test_data.drop(columns=['label', 9])
-        #y_test = test_data['label']
-        groups = df[9].values
-        X = df.drop(columns=['label', 9])
-        y = df['label']
+        train_data = df[df[9] != self.test_image]
+        test_data = df[df[9] == self.test_image]
+        X_train = train_data.drop(columns=['label', 9])
+        y_train = train_data['label']
+        X_test = test_data.drop(columns=['label', 9])
+        y_test = test_data['label']
         #self.vizualize_classes_distribution(df, 'label')
         # 9 столбец это номер картинки
 
-        return X, y, groups, np.array(coords)
+        return X_train, X_test, y_train, y_test, np.array(coords)
