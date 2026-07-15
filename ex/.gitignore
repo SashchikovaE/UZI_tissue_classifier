@@ -1,0 +1,12 @@
+# created by virtualenv automatically
+ex/
+__pycache__/
+*.csv
+*.png
+*.jpg
+*.jpeg
+*.BMP
+*.bmp
+*.joblib
+src/prediction_mask*.png
+web/prediction_mask*.png
